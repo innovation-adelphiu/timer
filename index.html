@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Timer</title>
+    <style>
+
+    body 
+    {
+        margin: 0; height: 100vh; display: flex; flex-direction: column;
+        justify-content: center; align-items: center;
+        font-family: system-ui, sans-serif; background: #eeeeff; color: #111111;
+    }
+    
+    .timerDial { position: relative; display: flex; align-items: center; justify-content: center;
+        width: 300px; height:300px; }
+    .timerDisplay { position: absolute; display: flex; align-items: center; justify-content: center;
+        font-size: 48px; font-weight: bold; }
+
+    svg { width: 100%; height: 100%; overflow: visible; }
+    .timerRingBase { stroke: #000000; }
+    .timerRingBlue { stroke: #0088ff; }
+    .timerRingRed  { stroke: #ff8888; stroke-linecap: butt; }
+    .timerRingBase, .timerRingBlue, .timerRingRed { fill: none; stroke-width: 20; }
+
+    .timerControls { margin-top: 20px; display: flex; gap: 16px; align-items: center; justify-content: center; }
+    .timerButton { border: 2px solid black; background: #dddddd; border-radius: 50%; cursor: pointer; 
+        display: flex; align-items: center; justify-content: center; transition: filter 0.2s ease; }
+    .timerButton:hover { filter: brightness(1.2); }
+    .timerButtonSmall { width: 48px; height: 48px; }
+    .timerButtonLarge { width: 72px; height: 72px; } 
+    .timerImage { width: 30px; height: 30px; }
+    </style>
+</head>
+<body>
+
+<div>
+    <div class="timerDial">
+        <svg viewBox="0 0 120 120">
+            <circle class="timerRingBase" cx="60" cy="60" r="51" />
+            <circle class="timerRingBase" cx="60" cy="60" r="53" />
+            <circle class="timerRingBlue" cx="60" cy="60" r="52" />
+            <!-- Red progress as an explicit arc path instead of stroke-dasharray -->
+            <path class="timerRingRed" id="timerRingRed" d="" />
+        </svg>
+        <div class="timerDisplay" id="timerDisplay">05:00</div>
+    </div>
+
+    <div class="timerControls">
+        <button id="timerResetButton" class="timerButton timerButtonSmall"><img class="timerImage" src="reset.png" alt="Reset"></button>
+        <button id="timerPlayPauseButton" class="timerButton timerButtonLarge"><img class="timerImage" id="playPauseIcon" src="play.png" alt="Play"></button>
+        <button id="timerSetButton" class="timerButton timerButtonSmall"><img class="timerImage" src="clock.png" alt="Set Time"></button>
+    </div>
+</div>
+
+<audio id="alertAudio" src="chime.mp3" preload="auto"></audio>
+
+<script>
+const ringRadius = 52;   // ring radius
+const CX = 60, CY = 60;  // ring center
+
+const timerRingRed = document.getElementById('timerRingRed');
+const timerDisplay = document.getElementById('timerDisplay');
+const playPauseIcon = document.getElementById('playPauseIcon');
+
+const alertAudio = document.getElementById('alertAudio');
+
+let totalSeconds = 5 * 60, remainingMilliseconds = totalSeconds * 1000;
+let running = false, endTimestamp = null, rafId = null;
+
+// SVG helper functions
+function polarPoint(centerX, centerY, radius, angleDeg)
+{
+    const angleRad = (angleDeg - 90) * Math.PI / 180; // -90 to start at top
+    return [centerX + radius * Math.cos(angleRad), centerY + radius * Math.sin(angleRad)];
+}
+
+function arcPath(centerX, centerY, radius, startDeg, endDeg)
+{
+    let delta = endDeg - startDeg;
+    if (delta <= 0) return '';
+    if (delta >= 360) delta = 359.999; // avoid full-circle single-arc issue
+    const large = delta > 180 ? 1 : 0;
+    const [x1,y1] = polarPoint(centerX,centerY,radius,startDeg);
+    const [x2,y2] = polarPoint(centerX,centerY,radius,endDeg);
+    // SVG syntax: M(ove to) A(rc)
+    return `M ${x1} ${y1} A ${radius} ${radius} 0 ${large} 1 ${x2} ${y2}`;
+}
+
+function fullCirclePath(centerX, centerY, radius)
+{
+    // draw full circle via two 180 arcs
+    const [x0,y0] = polarPoint(centerX,centerY,radius,0);
+    const [xm,ym] = polarPoint(centerX,centerY,radius,180);
+    return `M ${x0} ${y0} A ${radius} ${radius} 0 0 1 ${xm} ${ym} A ${radius} ${radius} 0 0 1 ${x0} ${y0}`;
+}
+
+function updateRing(elapsedMilliseconds)
+{
+    const ratio = Math.min(1, Math.max(0, elapsedMilliseconds / (totalSeconds * 1000)));
+    if (ratio <= 0) 
+        timerRingRed.setAttribute('d','');
+    else if (ratio >= 1)
+        timerRingRed.setAttribute('d', fullCirclePath(CX,CY,ringRadius));
+    else
+        timerRingRed.setAttribute('d', arcPath(CX,CY,ringRadius,0,360 * ratio));
+}
+
+function timerTextFormat(ms)
+{
+    const s = Math.max(0, Math.ceil(ms/1000));
+    return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+}
+
+function updateUI()
+{
+    timerDisplay.textContent = timerTextFormat(remainingMilliseconds);
+    updateRing(totalSeconds*1000 - remainingMilliseconds);
+    playPauseIcon.src = running ? 'pause.png' : 'play.png';
+}
+
+function tick()
+{
+    if (!running) 
+        return;
+    remainingMilliseconds = Math.max(0, endTimestamp - Date.now());
+    updateUI();
+    rafId = requestAnimationFrame(tick);
+    if (remainingMilliseconds <= 0) 
+    {
+        alertAudio.play();
+        stopTimer();
+    }
+}
+
+function startOrStopTimer()
+{
+    if (running)
+        stopTimer();
+    else
+        startTimer();
+}
+
+function startTimer()
+{
+    if (running) 
+        return;
+    running = true;
+    endTimestamp = Date.now() + remainingMilliseconds;
+    updateUI();
+    rafId = requestAnimationFrame(tick);
+}
+
+function stopTimer()
+{
+    running = false;
+    cancelAnimationFrame(rafId);
+    updateUI();
+}
+
+function reset()
+{
+    stopTimer();
+    remainingMilliseconds = totalSeconds * 1000;
+    updateUI();
+}
+
+function setTimeViaPrompt()
+{
+    const input = prompt('Set total countdown (mm:ss or minutes):', formatPreset(totalSeconds));
+    if (!input) 
+        return;
+    const seconds = parseTimeToSeconds(input);
+    if (!seconds) 
+        return alert('Invalid time');
+    stopTimer();
+    totalSeconds = seconds;
+    remainingMilliseconds = totalSeconds * 1000;
+    updateUI();
+}
+
+function parseTimeToSeconds(str)
+{
+    str = str.trim();
+    let min = 0, sec = 0;
+    
+    if (str.includes(':'))
+        [min, sec] = str.split(':').map(Number);
+    else
+        min = Number(str);
+
+    return (min >= 0 && sec >= 0 && sec < 60) ? (min*60 + sec) : 0;
+}
+
+function formatPreset(totalSec) 
+{
+    return `${String(Math.floor(totalSec/60)).padStart(2,'0')}:${String(totalSec%60).padStart(2,'0')}`;
+}
+
+document.getElementById('timerPlayPauseButton').onclick = startOrStopTimer;
+document.getElementById('timerResetButton').onclick = reset;
+document.getElementById('timerSetButton').onclick = setTimeViaPrompt;
+
+updateUI();
+</script>
+
+</body>
+</html>
